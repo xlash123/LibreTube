@@ -4,6 +4,8 @@ import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.github.libretube.api.obj.StreamItem
+import com.github.libretube.extensions.toMillis
+import kotlinx.datetime.Instant
 import kotlinx.datetime.LocalDate
 import java.nio.file.Path
 
@@ -17,7 +19,19 @@ data class Download(
     @ColumnInfo(defaultValue = "NULL")
     val duration: Long? = null,
     val uploadDate: LocalDate? = null,
-    val thumbnailPath: Path? = null
+    // Epoch millis
+    val uploadTimestamp: Long? = null,
+    val thumbnailPath: Path? = null,
+    val uploaderAvatarPath: Path? = null,
+    val views: Long? = null,
+    val uploaderVerified: Boolean? = null,
+    val likes: Long? = null,
+    val dislikes: Long? = null,
+    val visibility: String? = null,
+    val category: String? = null,
+    val license: String? = null,
+    val tags: List<String>? = null,
+    val uploaderSubscriberCount: Long? = null,
 ) {
     fun toStreamItem() = StreamItem(
         url = videoId,
@@ -26,6 +40,17 @@ data class Download(
         thumbnail = thumbnailPath?.toUri()?.toString(),
         duration = duration,
         uploadedDate = uploadDate?.toString(),
+        uploaded = uploadTimestamp ?: 0,
         uploaderName = uploader,
+        uploaderAvatar = uploaderAvatarPath.toString(),
+        views = views,
+        uploaderVerified = uploaderVerified,
+        likes = likes,
+        dislikes = dislikes,
+        visibility = visibility,
+        category = category,
+        license = license,
+        tags = tags,
+        uploaderSubscriberCount = uploaderSubscriberCount,
     )
 }

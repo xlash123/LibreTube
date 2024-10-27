@@ -33,6 +33,7 @@ object DownloadHelper {
     const val AUDIO_DIR = "audio"
     const val SUBTITLE_DIR = "subtitle"
     const val THUMBNAIL_DIR = "thumbnail"
+    const val UPLOADER_AVATAR_DIR = "uploader"
     const val DOWNLOAD_CHUNK_SIZE = 8L * 1024
     const val DEFAULT_TIMEOUT = 15 * 1000
     const val DEFAULT_RETRY = 3

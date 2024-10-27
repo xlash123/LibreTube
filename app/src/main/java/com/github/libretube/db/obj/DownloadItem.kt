@@ -9,7 +9,9 @@ import java.nio.file.Path
 
 @Entity(
     tableName = "downloadItem",
-    indices = [Index(value = ["path"], unique = true)],
+    indices = [
+        Index(value = ["path"], unique = true),
+    ],
     foreignKeys = [
         ForeignKey(
             entity = Download::class,

@@ -10,6 +10,7 @@ import androidx.room.Update
 import com.github.libretube.db.obj.Download
 import com.github.libretube.db.obj.DownloadChapter
 import com.github.libretube.db.obj.DownloadItem
+import com.github.libretube.db.obj.DownloadSegments
 import com.github.libretube.db.obj.DownloadWithItems
 import com.github.libretube.enums.FileType
 
@@ -37,6 +38,9 @@ interface DownloadDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertDownloadChapter(downloadChapter: DownloadChapter)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDownloadSegments(downloadSegments: DownloadSegments)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertDownloadItem(downloadItem: DownloadItem): Long

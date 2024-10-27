@@ -527,7 +527,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         binding.playerMotionLayout
             .addSwipeUpListener {
-                if (this.streams != null && PlayerHelper.fullscreenGesturesEnabled) {
+                if (this::streamItem.isInitialized && PlayerHelper.fullscreenGesturesEnabled) {
                     binding.player.hideController()
                     setFullscreen()
                 }
@@ -585,12 +585,12 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             }
 
         binding.commentsToggle.setOnClickListener {
-            if (streams == null) return@setOnClickListener
+            if (!this::streamItem.isInitialized) return@setOnClickListener
             // set the max height to not cover the currently playing video
             updateMaxSheetHeight()
             commentsViewModel.videoIdLiveData.updateIfChanged(videoId)
             CommentsSheet()
-                .apply { arguments = bundleOf(IntentData.channelAvatar to streams?.uploaderAvatar) }
+                .apply { arguments = bundleOf(IntentData.channelAvatar to streamItem.uploaderAvatar) }
                 .show(childFragmentManager)
         }
 
@@ -602,7 +602,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         // share button
         binding.relPlayerShare.setOnClickListener {
-            if (streams == null) return@setOnClickListener
+            if (!this::streamItem.isInitialized) return@setOnClickListener
             val bundle = bundleOf(
                 IntentData.id to videoId,
                 IntentData.shareObjectType to ShareObjectType.VIDEO,
@@ -628,7 +628,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                     context,
                     hlsStream,
                     streamItem.title,
-                    streams!!.uploader
+                    streamItem.uploaderName
                 )
             }
         }
@@ -659,10 +659,8 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         )
 
         binding.relPlayerSave.setOnClickListener {
-            if (streams == null) return@setOnClickListener
-
             AddToPlaylistDialog().apply {
-                arguments = bundleOf(IntentData.videoInfo to streams!!.toStreamItem(videoId))
+                arguments = bundleOf(IntentData.videoInfo to streamItem)
             }.show(childFragmentManager, AddToPlaylistDialog::class.java.name)
         }
 
@@ -686,7 +684,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             binding.relPlayerScreenshot.setOnClickListener {
-                if (streams == null) return@setOnClickListener
+                if (!this::streamItem.isInitialized) return@setOnClickListener
                 val surfaceView =
                     binding.player.videoSurfaceView as? SurfaceView ?: return@setOnClickListener
 
@@ -707,7 +705,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         }
 
         binding.playerChannel.setOnClickListener {
-            if (streams == null) return@setOnClickListener
+            if (this::streamItem.isInitialized && this.streamItem.uploaderUrl != null) return@setOnClickListener
 
             val activity = view?.context as MainActivity
             NavigationHelper.navigateChannel(requireContext(), streams!!.uploaderUrl)
@@ -1029,6 +1027,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                 useController = false
                 player = viewModel.player
             }
+            binding.relPlayerDownload.isVisible = isOnline
 
             initializePlayerView()
 
@@ -1061,7 +1060,12 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         // Since the highlight is also a chapter, we need to fetch the other segments
         // first
-        viewModel.fetchSponsorBlockSegments(videoId)
+        if (downloadedVideo?.downloadSegments != null) {
+            viewModel.segments = downloadedVideo!!.downloadSegments!!
+                .toSegmentData().segments
+        } else {
+            viewModel.fetchSponsorBlockSegments(videoId)
+        }
 
         if (viewModel.segments.isEmpty()) return
 
@@ -1128,7 +1132,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         binding.descriptionLayout.setStreams(streamItem)
 
         binding.apply {
-            ImageHelper.loadImage(streams?.uploaderAvatar, binding.playerChannelImage, true)
+            ImageHelper.loadImage(streamItem.uploaderAvatar, binding.playerChannelImage, true)
             playerChannelName.text = streamItem.uploaderName
             titleTextView.text = streamItem.title
             playerChannelSubCount.text = context?.getString(

@@ -17,6 +17,7 @@ import com.github.libretube.db.obj.CustomInstance
 import com.github.libretube.db.obj.Download
 import com.github.libretube.db.obj.DownloadChapter
 import com.github.libretube.db.obj.DownloadItem
+import com.github.libretube.db.obj.DownloadSegments
 import com.github.libretube.db.obj.LocalPlaylist
 import com.github.libretube.db.obj.LocalPlaylistItem
 import com.github.libretube.db.obj.LocalSubscription
@@ -39,9 +40,10 @@ import com.github.libretube.db.obj.WatchPosition
         Download::class,
         DownloadItem::class,
         DownloadChapter::class,
-        SubscriptionGroup::class
+        SubscriptionGroup::class,
+        DownloadSegments::class,
     ],
-    version = 18,
+    version = 19,
     autoMigrations = [
         AutoMigration(from = 7, to = 8),
         AutoMigration(from = 8, to = 9),
