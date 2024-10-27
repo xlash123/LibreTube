@@ -12,7 +12,7 @@ import androidx.core.view.isGone
 import androidx.core.view.isVisible
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.github.libretube.R
-import com.github.libretube.api.obj.Streams
+import com.github.libretube.api.obj.StreamItem
 import com.github.libretube.databinding.DescriptionLayoutBinding
 import com.github.libretube.extensions.formatShort
 import com.github.libretube.helpers.ClipboardHelper
@@ -27,7 +27,7 @@ class DescriptionLayout(
     attributeSet: AttributeSet?
 ) : LinearLayout(context, attributeSet) {
     val binding = DescriptionLayoutBinding.inflate(LayoutInflater.from(context), this, true)
-    private var streams: Streams? = null
+    private var streamItem: StreamItem? = null
     var handleLink: (link: String) -> Unit = {}
 
     init {
@@ -35,59 +35,62 @@ class DescriptionLayout(
             toggleDescription()
         }
         binding.playerTitleLayout.setOnLongClickListener {
-            streams?.title?.let { ClipboardHelper.save(context, text = it) }
+            streamItem?.title?.let { ClipboardHelper.save(context, text = it) }
             true
         }
     }
 
     @SuppressLint("SetTextI18n")
-    fun setStreams(streams: Streams) {
-        this.streams = streams
+    fun setStreams(streamItem: StreamItem) {
+        this.streamItem = streamItem
 
-        val views = streams.views.formatShort()
-        val date = TextUtils.formatRelativeDate(context, streams.uploaded ?: -1L)
+        val views = streamItem.views.formatShort()
+        val date = TextUtils.formatRelativeDate(context, streamItem.uploaded ?: -1L)
         binding.run {
             playerViewsInfo.text = context.getString(R.string.normal_views, views, TextUtils.SEPARATOR + date)
 
-            textLike.text = streams.likes.formatShort()
-            textDislike.isVisible = streams.dislikes >= 0
-            textDislike.text = streams.dislikes.formatShort()
+            textLike.text = streamItem.likes.formatShort()
+            textDislike.isVisible = streamItem.dislikes != null && streamItem.dislikes >= 0
+            textDislike.text = streamItem.dislikes.formatShort()
 
-            playerTitle.text = streams.title
-            playerDescription.text = streams.description
+            playerTitle.text = streamItem.title
+            playerDescription.text = streamItem.description
 
-            metaInfo.isVisible = streams.metaInfo.isNotEmpty()
+            metaInfo.isVisible = streamItem.title != null || streamItem.description != null
             // generate a meta info text with clickable links using html
-            val metaInfoText = streams.metaInfo.joinToString("\n\n") { info ->
-                val text = info.description.takeIf { it.isNotBlank() } ?: info.title
-                val links = info.urls.mapIndexed { index, url ->
-                    "<a href=\"$url\">${info.urlTexts.getOrNull(index).orEmpty()}</a>"
-                }.joinToString(", ")
-                "$text $links"
-            }
-            metaInfo.text = metaInfoText.parseAsHtml()
+//            val metaInfoText = streams.metaInfo.joinToString("\n\n") { info ->
+//                val text = info.description.takeIf { it.isNotBlank() } ?: info.title
+//                val links = info.urls.mapIndexed { index, url ->
+//                    "<a href=\"$url\">${info.urlTexts.getOrNull(index).orEmpty()}</a>"
+//                }.joinToString(", ")
+//                "$text $links"
+//            }
+            val metaInfoText = streamItem.description
+            metaInfo.text = metaInfoText?.parseAsHtml()
 
-            val visibility = when (streams.visibility) {
+            val visibility = when (streamItem.visibility) {
                 "public" -> context?.getString(R.string.visibility_public)
                 "unlisted" -> context?.getString(R.string.visibility_unlisted)
                 // currently no other visibility could be returned, might change in the future however
-                else -> streams.visibility.replaceFirstChar {
+                else -> streamItem.visibility?.replaceFirstChar {
                     if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString()
                 }
             }.orEmpty()
             additionalVideoInfo.text =
-                "${context?.getString(R.string.category)}: ${streams.category}\n" +
-                "${context?.getString(R.string.license)}: ${streams.license}\n" +
+                "${context?.getString(R.string.category)}: ${streamItem.category}\n" +
+                "${context?.getString(R.string.license)}: ${streamItem.license}\n" +
                 "${context?.getString(R.string.visibility)}: $visibility"
 
-            if (streams.tags.isNotEmpty()) {
+            if (streamItem.tags?.isNotEmpty() == true) {
                 binding.tagsRecycler.layoutManager =
                     LinearLayoutManager(context, LinearLayoutManager.HORIZONTAL, false)
-                binding.tagsRecycler.adapter = VideoTagsAdapter(streams.tags)
+                binding.tagsRecycler.adapter = VideoTagsAdapter(streamItem.tags)
             }
-            binding.tagsRecycler.isVisible = streams.tags.isNotEmpty()
+            binding.tagsRecycler.isVisible = streamItem.tags?.isNotEmpty() == true
 
-            setupDescription(streams.description)
+            if (streamItem.description != null) {
+                setupDescription(streamItem.description)
+            }
         }
     }
 
@@ -109,7 +112,7 @@ class DescriptionLayout(
     }
 
     private fun toggleDescription() {
-        val streams = streams ?: return
+        val streams = streamItem ?: return
 
         val views = if (binding.descLinLayout.isVisible) {
             // show formatted short view count

@@ -103,9 +103,10 @@ class DownloadsAdapter(
 
             root.setOnClickListener {
                 if (downloadTab == DownloadTab.VIDEO) {
-                    val intent = Intent(root.context, OfflinePlayerActivity::class.java)
-                    intent.putExtra(IntentData.videoId, download.videoId)
-                    root.context.startActivity(intent)
+                    NavigationHelper.navigateVideo(
+                        context,
+                        download.videoId,
+                    )
                 } else {
                     BackgroundHelper.playOnBackgroundOffline(root.context, download.videoId, downloadTab)
                     NavigationHelper.startAudioPlayer(root.context, offlinePlayer = true)

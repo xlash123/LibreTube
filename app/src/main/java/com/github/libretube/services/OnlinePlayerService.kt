@@ -14,6 +14,9 @@ import com.github.libretube.api.obj.Segment
 import com.github.libretube.api.obj.Streams
 import com.github.libretube.constants.IntentData
 import com.github.libretube.db.DatabaseHelper
+import com.github.libretube.db.DatabaseHolder.Database
+import com.github.libretube.db.obj.DownloadWithItems
+import com.github.libretube.enums.FileType
 import com.github.libretube.extensions.parcelableExtra
 import com.github.libretube.extensions.setMetadata
 import com.github.libretube.extensions.toID
@@ -29,6 +32,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
+import kotlin.io.path.exists
 
 /**
  * Loads the selected videos audio in background mode with a notification area.
@@ -48,6 +52,8 @@ class OnlinePlayerService : AbstractPlayerService() {
      */
     var streams: Streams? = null
         private set
+
+    private var downloadedVideo: DownloadWithItems? = null
 
     // SponsorBlock Segment data
     private var sponsorBlockSegments = listOf<Segment>()
@@ -78,24 +84,31 @@ class OnlinePlayerService : AbstractPlayerService() {
 
         isTransitioning = true
 
-        streams = withContext(Dispatchers.IO) {
-            try {
-                StreamsExtractor.extractStreams(videoId)
-            } catch (e: Exception) {
-                val errorMessage = StreamsExtractor.getExtractorErrorMessageString(this@OnlinePlayerService, e)
-                this@OnlinePlayerService.toastFromMainDispatcher(errorMessage)
-                return@withContext null
-            }
-        } ?: return
+        val downloadedVideo = withContext(Dispatchers.IO) {
+            Database.downloadDao().findById(videoId)
+        }
+        this.downloadedVideo = downloadedVideo
+
+        if (downloadedVideo == null) {
+            streams = withContext(Dispatchers.IO) {
+                try {
+                    StreamsExtractor.extractStreams(videoId)
+                } catch (e: Exception) {
+                    val errorMessage = StreamsExtractor.getExtractorErrorMessageString(this@OnlinePlayerService, e)
+                    this@OnlinePlayerService.toastFromMainDispatcher(errorMessage)
+                    return@withContext null
+                }
+            } ?: return
+        }
 
         if (PlayingQueue.isEmpty()) {
             PlayingQueue.updateQueue(
-                streams!!.toStreamItem(videoId),
+                downloadedVideo?.download?.toStreamItem() ?: streams!!.toStreamItem(videoId),
                 playlistId,
                 channelId,
-                streams!!.relatedStreams
+                streams?.relatedStreams ?: ArrayList(0)
             )
-        } else if (PlayingQueue.isLast() && playlistId == null && channelId == null) {
+        } else if (streams != null && PlayingQueue.isLast() && playlistId == null && channelId == null) {
             PlayingQueue.insertRelatedStreams(streams!!.relatedStreams)
         }
 
@@ -118,7 +131,7 @@ class OnlinePlayerService : AbstractPlayerService() {
                 if (seekToPosition != 0L) {
                     player?.seekTo(seekToPosition)
                 } else if (PlayerHelper.watchPositionsAudio) {
-                    PlayerHelper.getStoredWatchPosition(videoId, streams?.duration)?.let {
+                    PlayerHelper.getStoredWatchPosition(videoId, downloadedVideo?.download?.duration ?: streams?.duration)?.let {
                         player?.seekTo(it)
                     }
                 }
@@ -126,11 +139,13 @@ class OnlinePlayerService : AbstractPlayerService() {
         }
 
         val playerNotificationData = PlayerNotificationData(
-            streams?.title,
-            streams?.uploader,
-            streams?.thumbnailUrl
+            downloadedVideo?.download?.title ?: streams?.title,
+            downloadedVideo?.download?.uploader ?: streams?.uploader,
+            downloadedVideo?.download?.thumbnailPath?.toString() ?: streams?.thumbnailUrl
         )
         nowPlayingNotification?.updatePlayerNotification(videoId, playerNotificationData)
+
+        downloadedVideo?.download?.let { onNewVideoStarted?.invoke(it.toStreamItem()) }
         streams?.let { onNewVideoStarted?.invoke(it.toStreamItem(videoId)) }
 
         player?.apply {
@@ -159,6 +174,7 @@ class OnlinePlayerService : AbstractPlayerService() {
         // play new video on background
         this.videoId = nextVideo
         this.streams = null
+        this.downloadedVideo = null
         this.sponsorBlockSegments = emptyList()
 
         lifecycleScope.launch {
@@ -173,7 +189,10 @@ class OnlinePlayerService : AbstractPlayerService() {
         val streams = streams ?: return
 
         val (uri, mimeType) =
-            if (!PlayerHelper.useHlsOverDash && streams.audioStreams.isNotEmpty()) {
+            if (downloadedVideo?.downloadItems?.any { it.type == FileType.AUDIO && it.path.exists() } == true) {
+                val audio = downloadedVideo!!.downloadItems.firstOrNull() { it.type == FileType.AUDIO && it.path.exists() }!!
+                audio.url?.toUri() to audio.format
+            } else if (!PlayerHelper.useHlsOverDash && streams.audioStreams.isNotEmpty()) {
                 PlayerHelper.createDashSource(streams, this) to MimeTypes.APPLICATION_MPD
             } else {
                 ProxyHelper.unwrapStreamUrl(streams.hls.orEmpty())
@@ -183,7 +202,7 @@ class OnlinePlayerService : AbstractPlayerService() {
         val mediaItem = MediaItem.Builder()
             .setUri(uri)
             .setMimeType(mimeType)
-            .setMetadata(streams)
+            .setMetadata(streams.toStreamItem(videoId))
             .build()
         withContext(Dispatchers.Main) { player?.setMediaItem(mediaItem) }
     }
@@ -231,6 +250,7 @@ class OnlinePlayerService : AbstractPlayerService() {
                 // waiting for the player to be ready since the video can't be claimed to be watched
                 // while it did not yet start actually, but did buffer only so far
                 lifecycleScope.launch(Dispatchers.IO) {
+                    downloadedVideo?.download?.let { DatabaseHelper.addToWatchHistory(it.videoId, it.toStreamItem()) }
                     streams?.let { DatabaseHelper.addToWatchHistory(videoId, it) }
                 }
             }

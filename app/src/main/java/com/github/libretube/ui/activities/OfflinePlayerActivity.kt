@@ -228,7 +228,7 @@ class OfflinePlayerActivity : BaseActivity() {
     private fun playVideo() {
         lifecycleScope.launch {
             val (downloadInfo, downloadItems, downloadChapters) = withContext(Dispatchers.IO) {
-                Database.downloadDao().findById(videoId)
+                Database.downloadDao().findById(videoId)!!
             }
             PlayingQueue.updateCurrent(downloadInfo.toStreamItem())
 

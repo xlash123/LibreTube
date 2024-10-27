@@ -50,13 +50,17 @@ import androidx.media3.common.MediaItem.SubtitleConfiguration
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.datasource.FileDataSource
 import androidx.media3.datasource.cronet.CronetDataSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.MergingMediaSource
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.recyclerview.widget.LinearLayoutManager
 import com.github.libretube.R
 import com.github.libretube.api.CronetHelper
 import com.github.libretube.api.obj.ChapterSegment
 import com.github.libretube.api.obj.Segment
+import com.github.libretube.api.obj.StreamItem
 import com.github.libretube.api.obj.Streams
 import com.github.libretube.api.obj.Subtitle
 import com.github.libretube.compat.PictureInPictureCompat
@@ -65,12 +69,16 @@ import com.github.libretube.constants.IntentData
 import com.github.libretube.constants.PreferenceKeys
 import com.github.libretube.databinding.FragmentPlayerBinding
 import com.github.libretube.db.DatabaseHelper
+import com.github.libretube.db.DatabaseHolder.Database
+import com.github.libretube.db.obj.DownloadWithItems
+import com.github.libretube.enums.FileType
 import com.github.libretube.enums.PlayerEvent
 import com.github.libretube.enums.ShareObjectType
 import com.github.libretube.extensions.formatShort
 import com.github.libretube.extensions.parcelable
 import com.github.libretube.extensions.serializableExtra
 import com.github.libretube.extensions.setMetadata
+import com.github.libretube.extensions.toAndroidUri
 import com.github.libretube.extensions.toID
 import com.github.libretube.extensions.toastFromMainDispatcher
 import com.github.libretube.extensions.togglePlayPauseState
@@ -102,6 +110,7 @@ import com.github.libretube.ui.dialogs.ShareDialog
 import com.github.libretube.ui.extensions.animateDown
 import com.github.libretube.ui.extensions.setupSubscriptionButton
 import com.github.libretube.ui.interfaces.OnlinePlayerOptions
+import com.github.libretube.ui.interfaces.TimeFrameReceiver
 import com.github.libretube.ui.listeners.SeekbarPreviewListener
 import com.github.libretube.ui.models.ChaptersViewModel
 import com.github.libretube.ui.models.CommentsViewModel
@@ -111,6 +120,7 @@ import com.github.libretube.ui.sheets.BaseBottomSheet
 import com.github.libretube.ui.sheets.CommentsSheet
 import com.github.libretube.ui.sheets.StatsSheet
 import com.github.libretube.util.NowPlayingNotification
+import com.github.libretube.util.OfflineTimeFrameReceiver
 import com.github.libretube.util.OnlineTimeFrameReceiver
 import com.github.libretube.util.PauseableTimer
 import com.github.libretube.util.PlayingQueue
@@ -119,8 +129,10 @@ import com.github.libretube.util.TextUtils.toTimeInSeconds
 import com.github.libretube.util.YoutubeHlsPlaylistParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
+import kotlin.io.path.exists
 import kotlin.math.abs
 import kotlin.math.ceil
 
@@ -147,8 +159,12 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     private var timeStamp = 0L
     private var isShort = false
 
-    // data and objects stored for the player
-    private lateinit var streams: Streams
+    // Data and objects for an online video stored for the player
+    private var streams: Streams? = null
+    // Metadata about the video (online or offline)
+    private lateinit var streamItem: StreamItem
+    // Data about an downloaded video
+    private var downloadedVideo: DownloadWithItems? = null
     private var isPlayerTransitioning = true
 
     // if null, it's been set to automatic
@@ -255,7 +271,9 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             // add the video to the watch history when starting to play the video
             if (isPlaying && PlayerHelper.watchHistoryEnabled) {
                 lifecycleScope.launch(Dispatchers.IO) {
-                    DatabaseHelper.addToWatchHistory(videoId, streams)
+                    DatabaseHelper.addToWatchHistory(
+                        videoId,
+                        streamItem)
                 }
             }
 
@@ -509,7 +527,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         binding.playerMotionLayout
             .addSwipeUpListener {
-                if (this::streams.isInitialized && PlayerHelper.fullscreenGesturesEnabled) {
+                if (this.streams != null && PlayerHelper.fullscreenGesturesEnabled) {
                     binding.player.hideController()
                     setFullscreen()
                 }
@@ -567,12 +585,12 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             }
 
         binding.commentsToggle.setOnClickListener {
-            if (!this::streams.isInitialized) return@setOnClickListener
+            if (streams == null) return@setOnClickListener
             // set the max height to not cover the currently playing video
             updateMaxSheetHeight()
             commentsViewModel.videoIdLiveData.updateIfChanged(videoId)
             CommentsSheet()
-                .apply { arguments = bundleOf(IntentData.channelAvatar to streams.uploaderAvatar) }
+                .apply { arguments = bundleOf(IntentData.channelAvatar to streams?.uploaderAvatar) }
                 .show(childFragmentManager)
         }
 
@@ -584,12 +602,12 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         // share button
         binding.relPlayerShare.setOnClickListener {
-            if (!this::streams.isInitialized) return@setOnClickListener
+            if (streams == null) return@setOnClickListener
             val bundle = bundleOf(
                 IntentData.id to videoId,
                 IntentData.shareObjectType to ShareObjectType.VIDEO,
                 IntentData.shareData to ShareData(
-                    currentVideo = streams.title,
+                    currentVideo = streamItem.title,
                     currentPosition = viewModel.player.currentPosition / 1000
                 )
             )
@@ -599,18 +617,18 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         }
 
         binding.relPlayerExternalPlayer.setOnClickListener {
-            if (!this::streams.isInitialized || streams.hls == null) return@setOnClickListener
+            if (streams?.hls == null) return@setOnClickListener
 
             val context = requireContext()
             lifecycleScope.launch {
                 val hlsStream = withContext(Dispatchers.IO) {
-                    ProxyHelper.unwrapStreamUrl(streams.hls!!).toUri()
+                    ProxyHelper.unwrapStreamUrl(streams!!.hls!!).toUri()
                 }
                 IntentHelper.openWithExternalPlayer(
                     context,
                     hlsStream,
-                    streams.title,
-                    streams.uploader
+                    streamItem.title,
+                    streams!!.uploader
                 )
             }
         }
@@ -641,10 +659,10 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         )
 
         binding.relPlayerSave.setOnClickListener {
-            if (!::streams.isInitialized) return@setOnClickListener
+            if (streams == null) return@setOnClickListener
 
             AddToPlaylistDialog().apply {
-                arguments = bundleOf(IntentData.videoInfo to streams.toStreamItem(videoId))
+                arguments = bundleOf(IntentData.videoInfo to streams!!.toStreamItem(videoId))
             }.show(childFragmentManager, AddToPlaylistDialog::class.java.name)
         }
 
@@ -657,9 +675,9 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         }
 
         binding.relPlayerDownload.setOnClickListener {
-            if (!this::streams.isInitialized) return@setOnClickListener
+            if (streams == null) return@setOnClickListener
 
-            if (streams.duration <= 0) {
+            if (streams!!.duration <= 0) {
                 Toast.makeText(context, R.string.cannotDownload, Toast.LENGTH_SHORT).show()
             } else {
                 DownloadHelper.startDownloadDialog(requireContext(), childFragmentManager, videoId)
@@ -668,7 +686,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             binding.relPlayerScreenshot.setOnClickListener {
-                if (!this::streams.isInitialized) return@setOnClickListener
+                if (streams == null) return@setOnClickListener
                 val surfaceView =
                     binding.player.videoSurfaceView as? SurfaceView ?: return@setOnClickListener
 
@@ -681,7 +699,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                 PixelCopy.request(surfaceView, bmp, { _ ->
                     screenshotBitmap = bmp
                     val currentPosition = viewModel.player.currentPosition.toFloat() / 1000
-                    openScreenshotFile.launch("${streams.title}-${currentPosition}.png")
+                    openScreenshotFile.launch("${(streamItem.title)}-${currentPosition}.png")
                 }, Handler(Looper.getMainLooper()))
             }
         } else {
@@ -689,10 +707,10 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         }
 
         binding.playerChannel.setOnClickListener {
-            if (!this::streams.isInitialized) return@setOnClickListener
+            if (streams == null) return@setOnClickListener
 
             val activity = view?.context as MainActivity
-            NavigationHelper.navigateChannel(requireContext(), streams.uploaderUrl)
+            NavigationHelper.navigateChannel(requireContext(), streams!!.uploaderUrl)
             activity.binding.mainMotionLayout.transitionToEnd()
             binding.playerMotionLayout.transitionToEnd()
         }
@@ -722,10 +740,10 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     }
 
     private fun updateFullscreenOrientation() {
-        if (PlayerHelper.autoFullscreenEnabled || !this::streams.isInitialized) return
+        if (PlayerHelper.autoFullscreenEnabled) return
 
-        val height = streams.videoStreams.firstOrNull()?.height ?: viewModel.player.videoSize.height
-        val width = streams.videoStreams.firstOrNull()?.width ?: viewModel.player.videoSize.width
+        val height = streams?.videoStreams?.firstOrNull()?.height ?: viewModel.player.videoSize.height
+        val width = streams?.videoStreams?.firstOrNull()?.width ?: viewModel.player.videoSize.width
 
         mainActivity.requestedOrientation = PlayerHelper.getOrientation(width, height)
     }
@@ -944,30 +962,52 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         commentsViewModel.reset()
 
         lifecycleScope.launch(Dispatchers.Main) {
-            viewModel.fetchVideoInfo(requireContext(), videoId).let { (streams, errorMessage) ->
-                if (errorMessage != null) {
-                    context?.toastFromMainDispatcher(errorMessage, Toast.LENGTH_LONG)
-                    return@launch
-                }
+            this@PlayerFragment.streams = null
+            this@PlayerFragment.downloadedVideo = null
 
-                this@PlayerFragment.streams = streams!!
+            val downloadedVideo = withContext(Dispatchers.IO) {
+                Database.downloadDao().findById(videoId)
             }
+            val isOnline = downloadedVideo == null
+
+            val videoStreamItem = if (downloadedVideo != null) {
+                this@PlayerFragment.downloadedVideo = downloadedVideo
+                downloadedVideo.download.toStreamItem()
+            } else {
+                viewModel.fetchVideoInfo(requireContext(), videoId).let { (streams, errorMessage) ->
+                    if (errorMessage != null) {
+                        context?.toastFromMainDispatcher(errorMessage, Toast.LENGTH_LONG)
+                        return@launch
+                    }
+
+                    this@PlayerFragment.streams = streams!!
+                    streams.toStreamItem(videoId)
+                }
+            }
+            this@PlayerFragment.streamItem = videoStreamItem
 
             val isFirstVideo = PlayingQueue.isEmpty()
             if (isFirstVideo) {
-                PlayingQueue.updateQueue(streams.toStreamItem(videoId), playlistId, channelId)
+                PlayingQueue.updateQueue(videoStreamItem, playlistId, channelId)
             } else {
-                PlayingQueue.updateCurrent(streams.toStreamItem(videoId))
+                PlayingQueue.updateCurrent(videoStreamItem)
             }
             val isLastVideo = !isFirstVideo && PlayingQueue.isLast()
             val isAutoQueue = playlistId == null && channelId == null
-            if ((isFirstVideo || isLastVideo) && isAutoQueue) {
-                PlayingQueue.insertRelatedStreams(streams.relatedStreams)
-            }
 
-            val videoStream = streams.videoStreams.firstOrNull()
-            isShort = PlayingQueue.getCurrent()?.isShort == true ||
-                    (videoStream?.height ?: 0) > (videoStream?.width ?: 0)
+            if (isOnline) {
+                if ((isFirstVideo || isLastVideo) && isAutoQueue) {
+                    PlayingQueue.insertRelatedStreams(streams!!.relatedStreams)
+                }
+
+                val videoStream = streams!!.videoStreams.firstOrNull()
+                isShort = PlayingQueue.getCurrent()?.isShort == true ||
+                        (videoStream?.height ?: 0) > (videoStream?.width ?: 0)
+
+                if (streams!!.category == Streams.categoryMusic) {
+                    viewModel.player.setPlaybackSpeed(1f)
+                }
+            }
 
             PlayingQueue.setOnQueueTapListener { streamItem ->
                 streamItem.url?.toID()?.let { playNextVideo(it) }
@@ -1011,10 +1051,6 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             initializePlayerNotification()
 
             fetchSponsorBlockSegments()
-
-            if (streams.category == Streams.categoryMusic) {
-                viewModel.player.setPlaybackSpeed(1f)
-            }
 
             viewModel.isOrientationChangeInProgress = false
         }
@@ -1089,27 +1125,30 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             this
         )
 
-        binding.descriptionLayout.setStreams(streams)
+        binding.descriptionLayout.setStreams(streamItem)
 
         binding.apply {
-            ImageHelper.loadImage(streams.uploaderAvatar, binding.playerChannelImage, true)
-            playerChannelName.text = streams.uploader
-            titleTextView.text = streams.title
+            ImageHelper.loadImage(streams?.uploaderAvatar, binding.playerChannelImage, true)
+            playerChannelName.text = streamItem.uploaderName
+            titleTextView.text = streamItem.title
             playerChannelSubCount.text = context?.getString(
                 R.string.subscribers,
-                streams.uploaderSubscriberCount.formatShort()
+                streamItem.uploaderSubscriberCount.formatShort() ?: -1
             )
-            player.isLive = streams.livestream
+            player.isLive = streams?.livestream ?: false
         }
-        playerBinding.exoTitle.text = streams.title
+        playerBinding.exoTitle.text = streamItem.title
 
         // init the chapters recyclerview
-        chaptersViewModel.chaptersLiveData.postValue(streams.chapters)
+        chaptersViewModel.chaptersLiveData.postValue(
+            downloadedVideo?.downloadChapters?.map { c -> c.toChapterSegment() }
+                ?: streams!!.chapters
+        )
 
         if (PlayerHelper.relatedStreamsEnabled) {
             val relatedLayoutManager = binding.relatedRecView.layoutManager as LinearLayoutManager
             binding.relatedRecView.adapter = VideosAdapter(
-                streams.relatedStreams.filter { !it.title.isNullOrBlank() }.toMutableList(),
+                streams?.relatedStreams?.filter { !it.title.isNullOrBlank() }?.toMutableList() ?: ArrayList(),
                 forceMode = if (relatedLayoutManager.orientation == LinearLayoutManager.HORIZONTAL) {
                     VideosAdapter.Companion.LayoutMode.RELATED_COLUMN
                 } else {
@@ -1120,8 +1159,8 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         // update the subscribed state
         binding.playerSubscribe.setupSubscriptionButton(
-            this.streams.uploaderUrl.toID(),
-            this.streams.uploader
+            this.streams?.uploaderUrl?.toID(),
+            streamItem.uploaderName
         )
 
         // seekbar preview setup
@@ -1186,7 +1225,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     }
 
     private suspend fun initializeHighlight(highlight: Segment) {
-        val frameReceiver = OnlineTimeFrameReceiver(requireContext(), streams.previewFrames)
+        val frameReceiver: TimeFrameReceiver = getTimeFrameReceiver()
         val highlightStart = highlight.segmentStartAndEnd.first.toLong()
         val frame = withContext(Dispatchers.IO) {
             frameReceiver.getFrameAtTime(highlightStart * 1000)
@@ -1201,20 +1240,47 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         )
     }
 
-    private fun getSubtitleConfigs(): List<SubtitleConfiguration> = streams.subtitles.map {
-        val roleFlags = getSubtitleRoleFlags(it)
-        SubtitleConfiguration.Builder(it.url!!.toUri())
-            .setRoleFlags(roleFlags)
-            .setLanguage(it.code)
-            .setMimeType(it.mimeType).build()
+    private fun getTimeFrameReceiver(): TimeFrameReceiver = if (downloadedVideo != null) {
+        val downloadedFiles = downloadedVideo!!.downloadItems.filter { it.path.exists() }
+        val video = downloadedFiles.firstOrNull { it.type == FileType.VIDEO }
+        OfflineTimeFrameReceiver(requireContext(), video!!.path)
+    } else {
+        OnlineTimeFrameReceiver(requireContext(), streams!!.previewFrames)
     }
 
-    private fun createMediaItem(uri: Uri, mimeType: String) = MediaItem.Builder()
-        .setUri(uri)
-        .setMimeType(mimeType)
-        .setSubtitleConfigurations(getSubtitleConfigs())
-        .setMetadata(streams)
-        .build()
+    private fun getSubtitleConfigs(): List<SubtitleConfiguration> {
+        return if (downloadedVideo != null) {
+            val downloadedFiles = downloadedVideo!!.downloadItems.filter { it.path.exists() }
+            val subtitle = downloadedFiles.firstOrNull { it.type == FileType.SUBTITLE }
+            val subtitleUri = subtitle?.path?.toAndroidUri()
+            val subtitleConfigList: ArrayList<SubtitleConfiguration> = ArrayList()
+            if (subtitleUri != null) {
+                val subtitleConfig = SubtitleConfiguration.Builder(subtitleUri)
+                    .setMimeType(MimeTypes.APPLICATION_TTML)
+                    .setLanguage("en")
+                    .build()
+                subtitleConfigList.add(subtitleConfig)
+            }
+            subtitleConfigList
+        } else {
+            streams!!.subtitles.map {
+                val roleFlags = getSubtitleRoleFlags(it)
+                SubtitleConfiguration.Builder(it.url!!.toUri())
+                    .setRoleFlags(roleFlags)
+                    .setLanguage(it.code)
+                    .setMimeType(it.mimeType).build()
+            }
+        }
+    }
+
+    private fun createMediaItem(uri: Uri, mimeType: String): MediaItem {
+        val builder = MediaItem.Builder()
+            .setUri(uri)
+            .setMimeType(mimeType)
+            .setMetadata(streamItem)
+            .setSubtitleConfigurations(getSubtitleConfigs())
+        return builder.build()
+    }
 
     private fun setMediaSource(uri: Uri, mimeType: String) {
         val mediaItem = createMediaItem(uri, mimeType)
@@ -1258,9 +1324,9 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                     viewModel.player.seekTo(timeStamp * 1000)
                     // delete the time stamp because it already got consumed
                     timeStamp = 0L
-                } else if (!streams.livestream) {
+                } else if (!streamItem.isLive) {
                     // seek to the saved watch position
-                    PlayerHelper.getStoredWatchPosition(videoId, streams.duration)?.let {
+                    PlayerHelper.getStoredWatchPosition(videoId, streamItem.duration)?.let {
                         viewModel.player.seekTo(it)
                     }
                 }
@@ -1293,41 +1359,63 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         updateResolutionOnFullscreenChange(commonPlayerViewModel.isFullscreen.value == true)
 
         val (uri, mimeType) = when {
+            downloadedVideo?.downloadItems?.any { it.path.exists() } == true -> {
+                val videoUri = downloadedVideo!!.downloadItems.firstOrNull { it.path.exists() && it.type == FileType.VIDEO }
+                    ?.path?.toAndroidUri()
+                val audioUri = downloadedVideo!!.downloadItems.firstOrNull { it.path.exists() && it.type == FileType.AUDIO }
+                    ?.path?.toAndroidUri()
+                val videoItem = MediaItem.Builder()
+                    .setUri(videoUri)
+                    .build()
+                val audioItem = MediaItem.Builder()
+                    .setUri(audioUri)
+                    .build()
+
+                val videoSource = ProgressiveMediaSource.Factory(FileDataSource.Factory())
+                    .createMediaSource(videoItem)
+
+                val audioSource = ProgressiveMediaSource.Factory(FileDataSource.Factory())
+                    .createMediaSource(audioItem)
+
+                val mediaSource = MergingMediaSource(audioSource, videoSource)
+                withContext(Dispatchers.Main) { viewModel.player.setMediaSource(mediaSource) }
+                return
+            }
             // LBRY HLS
             PreferenceHelper.getBoolean(
                 PreferenceKeys.LBRY_HLS,
                 false
-            ) && streams.videoStreams.any {
+            ) && streams?.videoStreams?.any {
                 it.quality.orEmpty().contains("LBRY HLS")
-            } -> {
-                val lbryHlsUrl = streams.videoStreams.first {
+            } == true -> {
+                val lbryHlsUrl = streams!!.videoStreams.first {
                     it.quality!!.contains("LBRY HLS")
                 }.url!!
                 lbryHlsUrl.toUri() to MimeTypes.APPLICATION_M3U8
             }
             // DASH
-            !PlayerHelper.useHlsOverDash && streams.videoStreams.isNotEmpty() -> {
+            !PlayerHelper.useHlsOverDash && streams?.videoStreams?.isNotEmpty() == true -> {
                 // only use the dash manifest generated by YT if either it's a livestream or no other source is available
                 val dashUri =
-                    if (streams.livestream && streams.dash != null) {
+                    if (streams!!.livestream && streams!!.dash != null) {
                         ProxyHelper.unwrapStreamUrl(
-                            streams.dash!!
+                            streams!!.dash!!
                         ).toUri()
                     } else {
                         // skip LBRY urls when checking whether the stream source is usable
-                        PlayerHelper.createDashSource(streams, requireContext())
+                        PlayerHelper.createDashSource(streams!!, requireContext())
                     }
 
                 dashUri to MimeTypes.APPLICATION_MPD
             }
             // HLS
-            streams.hls != null -> {
+            streams?.hls != null -> {
                 val hlsMediaSourceFactory = HlsMediaSource.Factory(cronetDataSourceFactory)
                     .setPlaylistParserFactory(YoutubeHlsPlaylistParser.Factory())
 
                 val mediaSource = hlsMediaSourceFactory.createMediaSource(
                     createMediaItem(
-                        ProxyHelper.unwrapStreamUrl(streams.hls!!).toUri(),
+                        ProxyHelper.unwrapStreamUrl(streams!!.hls!!).toUri(),
                         MimeTypes.APPLICATION_M3U8
                     )
                 )
@@ -1362,9 +1450,9 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             )
         }
         val playerNotificationData = PlayerNotificationData(
-            streams.title,
-            streams.uploader,
-            streams.thumbnailUrl
+            streamItem.title,
+            streamItem.uploaderName,
+            streamItem.thumbnail
         )
         viewModel.nowPlayingNotification?.updatePlayerNotification(videoId, playerNotificationData)
     }
@@ -1385,12 +1473,12 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     }
 
     override fun onCaptionsClicked() {
-        if (!this@PlayerFragment::streams.isInitialized || streams.subtitles.isEmpty()) {
+        if (streams == null || streams!!.subtitles.isEmpty()) {
             Toast.makeText(context, R.string.no_subtitles_available, Toast.LENGTH_SHORT).show()
             return
         }
 
-        val subtitles = listOf(Subtitle(name = getString(R.string.none))).plus(streams.subtitles)
+        val subtitles = listOf(Subtitle(name = getString(R.string.none))).plus(streams!!.subtitles)
 
         BaseBottomSheet()
             .setSimpleItems(
@@ -1489,7 +1577,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     }
 
     override fun onStatsClicked() {
-        if (!this::streams.isInitialized) return
+        if (streams == null) return
         val videoStats = getVideoStats(viewModel.player, videoId)
         StatsSheet()
             .apply { arguments = bundleOf(IntentData.videoStats to videoStats) }
@@ -1559,9 +1647,9 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
     private fun createSeekbarPreviewListener(): SeekbarPreviewListener {
         return SeekbarPreviewListener(
-            OnlineTimeFrameReceiver(requireContext(), streams.previewFrames),
+            getTimeFrameReceiver(),
             playerBinding,
-            streams.duration * 1000
+            (streamItem.duration ?: 0) * 1000
         )
     }
 

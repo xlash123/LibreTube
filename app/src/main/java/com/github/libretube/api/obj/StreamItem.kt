@@ -22,7 +22,15 @@ data class StreamItem(
     val uploaderVerified: Boolean? = null,
     val uploaded: Long = 0,
     val shortDescription: String? = null,
-    val isShort: Boolean = false
+    val isShort: Boolean = false,
+    val likes: Long? = null,
+    val dislikes: Long? = null,
+    val description: String? = null,
+    val visibility: String? = null,
+    val category: String? = null,
+    val license: String? = null,
+    val tags: List<String>? = null,
+    val uploaderSubscriberCount: Long? = null,
 ) : Parcelable {
     val isLive get() = (duration != null) && (duration <= 0L)
 

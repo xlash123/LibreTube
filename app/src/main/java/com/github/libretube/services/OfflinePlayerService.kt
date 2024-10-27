@@ -70,6 +70,7 @@ class OfflinePlayerService : AbstractPlayerService() {
         val downloadWithItems = withContext(Dispatchers.IO) {
             Database.downloadDao().findById(videoId)
         }
+        if (downloadWithItems == null) return
         this.downloadWithItems = downloadWithItems
         onNewVideoStarted?.let { it(downloadWithItems.download.toStreamItem()) }
 
