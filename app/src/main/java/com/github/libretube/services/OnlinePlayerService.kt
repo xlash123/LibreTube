@@ -11,6 +11,7 @@ import com.github.libretube.api.RetrofitInstance
 import com.github.libretube.api.StreamsExtractor
 import com.github.libretube.api.obj.ChapterSegment
 import com.github.libretube.api.obj.Segment
+import com.github.libretube.api.obj.StreamItem
 import com.github.libretube.api.obj.Streams
 import com.github.libretube.constants.IntentData
 import com.github.libretube.db.DatabaseHelper
@@ -19,6 +20,7 @@ import com.github.libretube.db.obj.DownloadWithItems
 import com.github.libretube.enums.FileType
 import com.github.libretube.extensions.parcelableExtra
 import com.github.libretube.extensions.setMetadata
+import com.github.libretube.extensions.toAndroidUri
 import com.github.libretube.extensions.toID
 import com.github.libretube.extensions.toastFromMainDispatcher
 import com.github.libretube.helpers.PlayerHelper
@@ -54,6 +56,7 @@ class OnlinePlayerService : AbstractPlayerService() {
         private set
 
     private var downloadedVideo: DownloadWithItems? = null
+    private lateinit var streamItem: StreamItem
 
     // SponsorBlock Segment data
     private var sponsorBlockSegments = listOf<Segment>()
@@ -100,10 +103,15 @@ class OnlinePlayerService : AbstractPlayerService() {
                 }
             } ?: return
         }
+        this.streamItem = if (downloadedVideo != null) {
+            downloadedVideo.download.toStreamItem()
+        } else {
+            streams!!.toStreamItem(videoId)
+        }
 
         if (PlayingQueue.isEmpty()) {
             PlayingQueue.updateQueue(
-                downloadedVideo?.download?.toStreamItem() ?: streams!!.toStreamItem(videoId),
+                streamItem,
                 playlistId,
                 channelId,
                 streams?.relatedStreams ?: ArrayList(0)
@@ -113,7 +121,7 @@ class OnlinePlayerService : AbstractPlayerService() {
         }
 
         // save the current stream to the queue
-        streams?.toStreamItem(videoId)?.let {
+        streamItem.let {
             PlayingQueue.updateCurrent(it)
         }
 
@@ -131,7 +139,7 @@ class OnlinePlayerService : AbstractPlayerService() {
                 if (seekToPosition != 0L) {
                     player?.seekTo(seekToPosition)
                 } else if (PlayerHelper.watchPositionsAudio) {
-                    PlayerHelper.getStoredWatchPosition(videoId, downloadedVideo?.download?.duration ?: streams?.duration)?.let {
+                    PlayerHelper.getStoredWatchPosition(videoId, streamItem.duration)?.let {
                         player?.seekTo(it)
                     }
                 }
@@ -139,14 +147,13 @@ class OnlinePlayerService : AbstractPlayerService() {
         }
 
         val playerNotificationData = PlayerNotificationData(
-            downloadedVideo?.download?.title ?: streams?.title,
-            downloadedVideo?.download?.uploader ?: streams?.uploader,
-            downloadedVideo?.download?.thumbnailPath?.toString() ?: streams?.thumbnailUrl
+            streamItem.title,
+            streamItem.uploaderName,
+            streamItem.thumbnail,
         )
         nowPlayingNotification?.updatePlayerNotification(videoId, playerNotificationData)
 
-        downloadedVideo?.download?.let { onNewVideoStarted?.invoke(it.toStreamItem()) }
-        streams?.let { onNewVideoStarted?.invoke(it.toStreamItem(videoId)) }
+        streamItem.let { onNewVideoStarted?.invoke(it) }
 
         player?.apply {
             playWhenReady = PlayerHelper.playAutomatically
@@ -186,23 +193,21 @@ class OnlinePlayerService : AbstractPlayerService() {
      * Sets the [MediaItem] with the [streams] into the [player]
      */
     private suspend fun setMediaItem() {
-        val streams = streams ?: return
-
         val (uri, mimeType) =
             if (downloadedVideo?.downloadItems?.any { it.type == FileType.AUDIO && it.path.exists() } == true) {
                 val audio = downloadedVideo!!.downloadItems.firstOrNull() { it.type == FileType.AUDIO && it.path.exists() }!!
-                audio.url?.toUri() to audio.format
-            } else if (!PlayerHelper.useHlsOverDash && streams.audioStreams.isNotEmpty()) {
-                PlayerHelper.createDashSource(streams, this) to MimeTypes.APPLICATION_MPD
+                audio.path.toAndroidUri() to audio.format
+            } else if (!PlayerHelper.useHlsOverDash && streams?.audioStreams?.isNotEmpty() == true) {
+                PlayerHelper.createDashSource(streams!!, this) to MimeTypes.APPLICATION_MPD
             } else {
-                ProxyHelper.unwrapStreamUrl(streams.hls.orEmpty())
+                ProxyHelper.unwrapStreamUrl(streams?.hls.orEmpty())
                     .toUri() to MimeTypes.APPLICATION_M3U8
             }
 
         val mediaItem = MediaItem.Builder()
             .setUri(uri)
             .setMimeType(mimeType)
-            .setMetadata(streams.toStreamItem(videoId))
+            .setMetadata(streamItem)
             .build()
         withContext(Dispatchers.Main) { player?.setMediaItem(mediaItem) }
     }
@@ -214,10 +219,14 @@ class OnlinePlayerService : AbstractPlayerService() {
         lifecycleScope.launch(Dispatchers.IO) {
             runCatching {
                 if (sponsorBlockConfig.isEmpty()) return@runCatching
-                sponsorBlockSegments = RetrofitInstance.api.getSegments(
-                    videoId,
-                    JsonHelper.json.encodeToString(sponsorBlockConfig.keys)
-                ).segments
+                sponsorBlockSegments = if (downloadedVideo?.downloadSegments != null) {
+                    downloadedVideo!!.downloadSegments!!.toSegmentData().segments
+                } else{
+                    RetrofitInstance.api.getSegments(
+                        videoId,
+                        JsonHelper.json.encodeToString(sponsorBlockConfig.keys)
+                    ).segments
+                }
                 checkForSegments()
             }
         }
@@ -250,12 +259,13 @@ class OnlinePlayerService : AbstractPlayerService() {
                 // waiting for the player to be ready since the video can't be claimed to be watched
                 // while it did not yet start actually, but did buffer only so far
                 lifecycleScope.launch(Dispatchers.IO) {
-                    downloadedVideo?.download?.let { DatabaseHelper.addToWatchHistory(it.videoId, it.toStreamItem()) }
-                    streams?.let { DatabaseHelper.addToWatchHistory(videoId, it) }
+                    streamItem.let { DatabaseHelper.addToWatchHistory(videoId, it) }
                 }
             }
         }
     }
 
-    override fun getChapters(): List<ChapterSegment> = streams?.chapters.orEmpty()
+    override fun getChapters(): List<ChapterSegment> =
+        downloadedVideo?.downloadChapters?.map { it.toChapterSegment() }
+        ?: streams?.chapters.orEmpty()
 }

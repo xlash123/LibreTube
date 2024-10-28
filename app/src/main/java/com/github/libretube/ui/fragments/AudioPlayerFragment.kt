@@ -86,6 +86,7 @@ class AudioPlayerFragment : Fragment(), AudioPlayerOptions {
             val binder = service as AbstractPlayerService.LocalBinder
             playerService = binder.getService()
             handleServiceConnection()
+            handleServiceConnection()
         }
 
         override fun onServiceDisconnected(arg0: ComponentName) {}
