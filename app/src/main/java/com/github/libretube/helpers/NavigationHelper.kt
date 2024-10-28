@@ -19,6 +19,7 @@ import com.github.libretube.enums.PlaylistType
 import com.github.libretube.extensions.toID
 import com.github.libretube.parcelable.PlayerData
 import com.github.libretube.ui.activities.MainActivity
+import com.github.libretube.ui.activities.NoInternetActivity
 import com.github.libretube.ui.activities.ZoomableImageActivity
 import com.github.libretube.ui.base.BaseActivity
 import com.github.libretube.ui.fragments.AudioPlayerFragment
@@ -80,7 +81,7 @@ object NavigationHelper {
             PlayerData(videoUrlOrId.toID(), playlistId, channelId, keepQueue, timestamp)
         val bundle = bundleOf(IntentData.playerData to playerData)
 
-        val activity = ContextHelper.unwrapActivity<MainActivity>(context)
+        val activity = ContextHelper.tryUnwrapActivity<MainActivity>(context) ?: ContextHelper.unwrapActivity<NoInternetActivity>(context)
         activity.supportFragmentManager.commitNow {
             replace<PlayerFragment>(R.id.container, args = bundle)
         }

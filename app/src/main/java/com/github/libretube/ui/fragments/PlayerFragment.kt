@@ -129,7 +129,6 @@ import com.github.libretube.util.TextUtils.toTimeInSeconds
 import com.github.libretube.util.YoutubeHlsPlaylistParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.util.concurrent.Executors
 import kotlin.io.path.exists
@@ -195,10 +194,10 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     // Activity that's active during PiP, can be used for controlling its lifecycle.
     private var pipActivity: Activity? = null
 
-    private val mainActivity get() = activity as MainActivity
+    private val baseActivity get() = activity as BaseActivity
     private val windowInsetsControllerCompat
         get() = WindowCompat
-            .getInsetsController(mainActivity.window, mainActivity.window.decorView)
+            .getInsetsController(baseActivity.window, baseActivity.window.decorView)
 
     private val fullscreenDialog by lazy {
         object : Dialog(requireContext(), android.R.style.Theme_Black_NoTitleBar_Fullscreen) {
@@ -259,7 +258,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            if (PlayerHelper.pipEnabled || PictureInPictureCompat.isInPictureInPictureMode(mainActivity)) {
+            if (PlayerHelper.pipEnabled || PictureInPictureCompat.isInPictureInPictureMode(baseActivity)) {
                 PictureInPictureCompat.setPictureInPictureParams(requireActivity(), pipParams)
             }
 
@@ -472,6 +471,8 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initializeTransitionLayout() {
+        if (baseActivity !is MainActivity) return
+        val mainActivity = baseActivity as MainActivity
         mainActivity.binding.container.isVisible = true
         val mainMotionLayout = mainActivity.binding.mainMotionLayout
         mainMotionLayout.progress = 0F
@@ -743,7 +744,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         val height = streams?.videoStreams?.firstOrNull()?.height ?: viewModel.player.videoSize.height
         val width = streams?.videoStreams?.firstOrNull()?.width ?: viewModel.player.videoSize.width
 
-        mainActivity.requestedOrientation = PlayerHelper.getOrientation(width, height)
+        baseActivity.requestedOrientation = PlayerHelper.getOrientation(width, height)
     }
 
     private fun setFullscreen() {
@@ -769,7 +770,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         commonPlayerViewModel.isFullscreen.value = false
 
         if (!PlayerHelper.autoFullscreenEnabled) {
-            mainActivity.requestedOrientation = mainActivity.screenOrientationPref
+            baseActivity.requestedOrientation = baseActivity.screenOrientationPref
         }
 
         openOrCloseFullscreenDialog(false)
@@ -886,7 +887,9 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         }
 
         // restore the orientation that's used by the main activity
-        (context as MainActivity).requestOrientationChange()
+        if (context is MainActivity) {
+            (context as MainActivity).requestOrientationChange()
+        }
 
         _binding = null
     }
@@ -907,7 +910,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                 override fun onTransitionCompleted(motionLayout: MotionLayout?, currentId: Int) {
                     super.onTransitionCompleted(motionLayout, currentId)
 
-                    mainActivity.supportFragmentManager.commit {
+                    baseActivity.supportFragmentManager.commit {
                         remove(this@PlayerFragment)
                     }
                 }
@@ -915,7 +918,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
             unsetFullscreen()
         } else {
-            mainActivity.supportFragmentManager.commit {
+            baseActivity.supportFragmentManager.commit {
                 remove(this@PlayerFragment)
             }
         }
@@ -1468,10 +1471,10 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     private fun changeOrientationMode() {
         if (PlayerHelper.autoFullscreenEnabled) {
             // enable auto rotation
-            mainActivity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            baseActivity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
         } else {
             // go to portrait mode
-            mainActivity.requestedOrientation =
+            baseActivity.requestedOrientation =
                 (requireActivity() as BaseActivity).screenOrientationPref
         }
     }
@@ -1674,7 +1677,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
      * If true, the activity will be automatically restarted
      */
     private fun restartActivityIfNeeded() {
-        if (mainActivity.screenOrientationPref in lockedOrientations || viewModel.isOrientationChangeInProgress) return
+        if (baseActivity.screenOrientationPref in lockedOrientations || viewModel.isOrientationChangeInProgress) return
 
         val orientation = resources.configuration.orientation
         if (commonPlayerViewModel.isFullscreen.value != true && orientation != playerLayoutOrientation) {
