@@ -4,6 +4,7 @@ import androidx.room.Embedded
 import androidx.room.Relation
 import com.github.libretube.enums.FileType
 import com.github.libretube.ui.fragments.DownloadTab
+import kotlin.io.path.exists
 
 data class DownloadWithItems(
     @Embedded val download: Download,
@@ -23,6 +24,10 @@ data class DownloadWithItems(
     )
     val downloadSegments: DownloadSegments? = null,
 )
+
+fun List<DownloadItem>.getByType(type: FileType) = firstOrNull() { item ->
+    item.type == type && item.path.exists()
+}
 
 fun List<DownloadWithItems>.filterByTab(tab: DownloadTab) = filter { dl ->
     when (tab) {

@@ -16,6 +16,7 @@ data class Download(
     val title: String = "",
     val description: String = "",
     val uploader: String = "",
+    val uploaderUrl: String = "",
     @ColumnInfo(defaultValue = "NULL")
     val duration: Long? = null,
     val uploadDate: LocalDate? = null,
@@ -42,6 +43,7 @@ data class Download(
         uploadedDate = uploadDate?.toString(),
         uploaded = uploadTimestamp ?: 0,
         uploaderName = uploader,
+        uploaderUrl = uploaderUrl,
         uploaderAvatar = uploaderAvatarPath.toString(),
         views = views,
         uploaderVerified = uploaderVerified,

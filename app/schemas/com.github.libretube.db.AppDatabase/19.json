@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 19,
-    "identityHash": "0fa2e18c08fc94973d45f105e7849f08",
+    "identityHash": "f7e0bf7c42045f3f18acef2d7715461f",
     "entities": [
       {
         "tableName": "watchHistoryItem",
@@ -340,7 +340,7 @@
       },
       {
         "tableName": "download",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`videoId` TEXT NOT NULL, `title` TEXT NOT NULL, `description` TEXT NOT NULL, `uploader` TEXT NOT NULL, `duration` INTEGER DEFAULT NULL, `uploadDate` TEXT, `uploadTimestamp` INTEGER, `thumbnailPath` TEXT, `uploaderAvatarPath` TEXT, `views` INTEGER, `uploaderVerified` INTEGER, `likes` INTEGER, `dislikes` INTEGER, `visibility` TEXT, `category` TEXT, `license` TEXT, `tags` TEXT, `uploaderSubscriberCount` INTEGER, PRIMARY KEY(`videoId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`videoId` TEXT NOT NULL, `title` TEXT NOT NULL, `description` TEXT NOT NULL, `uploader` TEXT NOT NULL, `uploaderUrl` TEXT NOT NULL, `duration` INTEGER DEFAULT NULL, `uploadDate` TEXT, `uploadTimestamp` INTEGER, `thumbnailPath` TEXT, `uploaderAvatarPath` TEXT, `views` INTEGER, `uploaderVerified` INTEGER, `likes` INTEGER, `dislikes` INTEGER, `visibility` TEXT, `category` TEXT, `license` TEXT, `tags` TEXT, `uploaderSubscriberCount` INTEGER, PRIMARY KEY(`videoId`))",
         "fields": [
           {
             "fieldPath": "videoId",
@@ -363,6 +363,12 @@
           {
             "fieldPath": "uploader",
             "columnName": "uploader",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uploaderUrl",
+            "columnName": "uploaderUrl",
             "affinity": "TEXT",
             "notNull": true
           },
@@ -669,7 +675,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0fa2e18c08fc94973d45f105e7849f08')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f7e0bf7c42045f3f18acef2d7715461f')"
     ]
   }
 }

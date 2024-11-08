@@ -127,6 +127,7 @@ class DownloadService : LifecycleService() {
                     title = streams.title,
                     description = streams.description,
                     uploader = streams.uploader,
+                    uploaderUrl = streams.uploaderUrl,
                     duration = streams.duration,
                     uploadDate = streams.uploadTimestamp?.toLocalDateTime(TimeZone.currentSystemDefault())?.date,
                     uploadTimestamp = streams.uploadTimestamp?.toEpochMilliseconds(),

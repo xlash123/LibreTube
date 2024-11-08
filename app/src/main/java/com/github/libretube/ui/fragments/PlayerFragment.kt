@@ -53,6 +53,7 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.FileDataSource
 import androidx.media3.datasource.cronet.CronetDataSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MergingMediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -71,6 +72,7 @@ import com.github.libretube.databinding.FragmentPlayerBinding
 import com.github.libretube.db.DatabaseHelper
 import com.github.libretube.db.DatabaseHolder.Database
 import com.github.libretube.db.obj.DownloadWithItems
+import com.github.libretube.db.obj.getByType
 import com.github.libretube.enums.FileType
 import com.github.libretube.enums.PlayerEvent
 import com.github.libretube.enums.ShareObjectType
@@ -706,10 +708,11 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         }
 
         binding.playerChannel.setOnClickListener {
-            if (this::streamItem.isInitialized && this.streamItem.uploaderUrl != null) return@setOnClickListener
+            if (!this::streamItem.isInitialized || this.streamItem.uploaderUrl == null
+                || this.streamItem.uploaderUrl?.isEmpty() == true) return@setOnClickListener
 
             val activity = view?.context as MainActivity
-            NavigationHelper.navigateChannel(requireContext(), streams!!.uploaderUrl)
+            NavigationHelper.navigateChannel(requireContext(), streamItem.uploaderUrl)
             activity.binding.mainMotionLayout.transitionToEnd()
             binding.playerMotionLayout.transitionToEnd()
         }
@@ -1257,8 +1260,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
     private fun getSubtitleConfigs(): List<SubtitleConfiguration> {
         return if (downloadedVideo != null) {
-            val downloadedFiles = downloadedVideo!!.downloadItems.filter { it.path.exists() }
-            val subtitle = downloadedFiles.firstOrNull { it.type == FileType.SUBTITLE }
+            val subtitle = downloadedVideo!!.downloadItems.getByType(FileType.SUBTITLE)
             val subtitleUri = subtitle?.path?.toAndroidUri()
             val subtitleConfigList: ArrayList<SubtitleConfiguration> = ArrayList()
             if (subtitleUri != null) {
@@ -1367,24 +1369,26 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
         val (uri, mimeType) = when {
             downloadedVideo?.downloadItems?.any { it.path.exists() } == true -> {
-                val videoUri = downloadedVideo!!.downloadItems.firstOrNull { it.path.exists() && it.type == FileType.VIDEO }
+                val videoUri = downloadedVideo!!.downloadItems.getByType(FileType.VIDEO)
                     ?.path?.toAndroidUri()
-                val audioUri = downloadedVideo!!.downloadItems.firstOrNull { it.path.exists() && it.type == FileType.AUDIO }
+                val audioUri = downloadedVideo!!.downloadItems.getByType(FileType.AUDIO)
                     ?.path?.toAndroidUri()
-                val videoItem = MediaItem.Builder()
-                    .setUri(videoUri)
-                    .build()
                 val audioItem = MediaItem.Builder()
                     .setUri(audioUri)
                     .build()
 
-                val videoSource = ProgressiveMediaSource.Factory(FileDataSource.Factory())
-                    .createMediaSource(videoItem)
+                val videoAndSubtitleMediaSource = DefaultMediaSourceFactory(requireContext())
+                    .createMediaSource(MediaItem.Builder()
+                        .setUri(videoUri)
+                        .setSubtitleConfigurations(getSubtitleConfigs())
+                        .build()
+                    )
 
                 val audioSource = ProgressiveMediaSource.Factory(FileDataSource.Factory())
                     .createMediaSource(audioItem)
 
-                val mediaSource = MergingMediaSource(audioSource, videoSource)
+                val mediaSource = MergingMediaSource(audioSource, videoAndSubtitleMediaSource)
+
                 withContext(Dispatchers.Main) { viewModel.player.setMediaSource(mediaSource) }
                 return
             }
@@ -1480,12 +1484,27 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
     }
 
     override fun onCaptionsClicked() {
-        if (streams == null || streams!!.subtitles.isEmpty()) {
+        val downloadedCaptions = downloadedVideo?.downloadItems?.getByType(FileType.SUBTITLE)
+        // Check if any captions are available
+        if (downloadedCaptions == null && (streams == null || streams!!.subtitles.isEmpty())) {
             Toast.makeText(context, R.string.no_subtitles_available, Toast.LENGTH_SHORT).show()
             return
         }
 
-        val subtitles = listOf(Subtitle(name = getString(R.string.none))).plus(streams!!.subtitles)
+        val subtitles = ArrayList<Subtitle>()
+        subtitles.add(Subtitle(name = getString(R.string.none)))
+        if (streams != null) {
+            subtitles.addAll(streams!!.subtitles)
+        }
+        if (downloadedCaptions != null) {
+            subtitles.add(Subtitle(
+                name = "Downloaded",
+                url = downloadedCaptions.path.toString(),
+                autoGenerated = false,
+                mimeType = "application/ttml+xml",
+                code = "en",
+            ))
+        }
 
         BaseBottomSheet()
             .setSimpleItems(

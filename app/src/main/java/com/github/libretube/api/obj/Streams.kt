@@ -98,7 +98,15 @@ data class Streams(
             duration = duration,
             views = views,
             uploaderVerified = uploaderVerified,
-            shortDescription = description
+            shortDescription = description,
+            uploaderSubscriberCount = uploaderSubscriberCount,
+            likes = likes,
+            dislikes = dislikes,
+            tags = tags,
+            description = description,
+            license = license,
+            category = category,
+            visibility = visibility,
         )
     }
 
