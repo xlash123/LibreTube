@@ -3,18 +3,24 @@ package com.github.libretube.services
 import android.content.Intent
 import android.os.Bundle
 import androidx.annotation.OptIn
+import androidx.core.os.bundleOf
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import com.github.libretube.api.JsonHelper
+import com.github.libretube.api.RetrofitInstance
+import com.github.libretube.api.obj.Segment
 import com.github.libretube.constants.IntentData
 import com.github.libretube.db.DatabaseHolder.Database
 import com.github.libretube.db.obj.DownloadWithItems
 import com.github.libretube.db.obj.filterByTab
 import com.github.libretube.enums.FileType
+import com.github.libretube.enums.PlayerCommand
 import com.github.libretube.extensions.serializable
 import com.github.libretube.extensions.setMetadata
 import com.github.libretube.extensions.toAndroidUri
 import com.github.libretube.helpers.PlayerHelper
+import com.github.libretube.helpers.PlayerHelper.checkForSegments
 import com.github.libretube.ui.activities.MainActivity
 import com.github.libretube.ui.activities.NoInternetActivity
 import com.github.libretube.ui.fragments.DownloadTab
@@ -24,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
 import kotlin.io.path.exists
 
 /**
@@ -38,6 +45,10 @@ open class OfflinePlayerService : AbstractPlayerService() {
     private var downloadWithItems: DownloadWithItems? = null
     private lateinit var downloadTab: DownloadTab
     private var shuffle: Boolean = false
+
+    private var sponsorBlockAutoSkip = true
+    private var sponsorBlockSegments = listOf<Segment>()
+    private var sponsorBlockConfig = PlayerHelper.getSponsorBlockCategories()
 
     private val scope = CoroutineScope(Dispatchers.Main)
 
@@ -97,6 +108,8 @@ open class OfflinePlayerService : AbstractPlayerService() {
                     exoPlayer?.seekTo(it)
                 }
             }
+
+            if (PlayerHelper.sponsorBlockEnabled) fetchSponsorBlockSegments()
         }
     }
 
@@ -140,10 +153,54 @@ open class OfflinePlayerService : AbstractPlayerService() {
     }
 
     /**
+     * check for SponsorBlock segments
+     */
+    private fun checkForSegments() {
+        handler.postDelayed(this::checkForSegments, 100)
+
+        exoPlayer?.checkForSegments(
+            this,
+            sponsorBlockSegments,
+            sponsorBlockConfig,
+            skipAutomaticallyIfEnabled = sponsorBlockAutoSkip
+        )
+    }
+
+    /**
+     * fetch the segments for SponsorBlock
+     */
+    private fun fetchSponsorBlockSegments() = scope.launch(Dispatchers.IO) {
+        runCatching {
+            if (sponsorBlockConfig.isEmpty()) return@runCatching
+            sponsorBlockSegments = runBlocking(Dispatchers.IO) {
+                val download = Database.downloadDao().findById(videoId)
+                download?.downloadSegments?.toSegmentData()?.segments
+            }.orEmpty()
+
+            withContext(Dispatchers.Main) {
+                updatePlaylistMetadata {
+                    setExtras(bundleOf(IntentData.segments to ArrayList(sponsorBlockSegments)))
+                }
+
+                checkForSegments()
+            }
+        }
+    }
+
+    /**
      * Stop the service when app is removed from the task manager.
      */
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
         onDestroy()
     }
+
+    override fun runPlayerCommand(args: Bundle) {
+        super.runPlayerCommand(args)
+
+        if (args.containsKey(PlayerCommand.SET_SB_AUTO_SKIP_ENABLED.name)) {
+            sponsorBlockAutoSkip = args.getBoolean(PlayerCommand.SET_SB_AUTO_SKIP_ENABLED.name)
+        }
+    }
+
 }

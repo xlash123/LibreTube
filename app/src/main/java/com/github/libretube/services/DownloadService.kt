@@ -19,13 +19,16 @@ import androidx.lifecycle.lifecycleScope
 import com.github.libretube.LibreTubeApp.Companion.DOWNLOAD_CHANNEL_NAME
 import com.github.libretube.R
 import com.github.libretube.api.CronetHelper
+import com.github.libretube.api.JsonHelper
 import com.github.libretube.api.RetrofitInstance
 import com.github.libretube.api.StreamsExtractor
+import com.github.libretube.api.obj.SegmentData
 import com.github.libretube.constants.IntentData
 import com.github.libretube.db.DatabaseHolder.Database
 import com.github.libretube.db.obj.Download
 import com.github.libretube.db.obj.DownloadChapter
 import com.github.libretube.db.obj.DownloadItem
+import com.github.libretube.db.obj.DownloadSegments
 import com.github.libretube.enums.FileType
 import com.github.libretube.enums.NotificationId
 import com.github.libretube.extensions.formatAsFileSize
@@ -35,6 +38,7 @@ import com.github.libretube.extensions.toastFromMainThread
 import com.github.libretube.helpers.DownloadHelper
 import com.github.libretube.helpers.DownloadHelper.getNotificationId
 import com.github.libretube.helpers.ImageHelper
+import com.github.libretube.helpers.PlayerHelper
 import com.github.libretube.helpers.ProxyHelper
 import com.github.libretube.obj.DownloadStatus
 import com.github.libretube.parcelable.DownloadData
@@ -55,6 +59,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import okio.buffer
 import okio.sink
 import okio.source
@@ -134,6 +140,26 @@ class DownloadService : LifecycleService() {
                     )
                     Database.downloadDao().insertDownloadChapter(downloadChapter)
                 }
+
+                // Download SponsorBlock segments
+                runCatching {
+                    val sbConfig = PlayerHelper.getSponsorBlockCategories()
+                    val segments = RetrofitInstance.api.getSegments(
+                            videoId,
+                            JsonHelper.json.encodeToString(sbConfig.keys)
+                        ).segments
+                    val segmentData = SegmentData(
+                        hash = "",
+                        segments = segments,
+                        videoID = videoId,
+                    )
+                    val downloadSegments = DownloadSegments(
+                        videoId = videoId,
+                        segmentData = Json.encodeToString(segmentData)
+                    )
+                    Database.downloadDao().insertDownloadSegments(downloadSegments)
+                }
+
                 ImageHelper.downloadImage(
                     this@DownloadService,
                     streams.thumbnailUrl,

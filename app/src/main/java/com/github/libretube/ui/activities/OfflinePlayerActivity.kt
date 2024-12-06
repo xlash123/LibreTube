@@ -6,14 +6,20 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.format.DateUtils
 import android.view.KeyEvent
 import androidx.activity.viewModels
 import androidx.core.content.ContextCompat
 import androidx.core.os.bundleOf
+import androidx.core.view.isGone
 import androidx.core.view.isInvisible
 import androidx.core.view.isVisible
+import androidx.fragment.app.viewModels
+import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.ui.PlayerView
@@ -30,6 +36,8 @@ import com.github.libretube.enums.PlayerEvent
 import com.github.libretube.extensions.serializableExtra
 import com.github.libretube.helpers.BackgroundHelper
 import com.github.libretube.helpers.PlayerHelper
+import com.github.libretube.helpers.PlayerHelper.checkForSegments
+import com.github.libretube.helpers.PlayerHelper.isInSegment
 import com.github.libretube.helpers.WindowHelper
 import com.github.libretube.services.AbstractPlayerService
 import com.github.libretube.services.VideoOfflinePlayerService
@@ -39,6 +47,7 @@ import com.github.libretube.ui.interfaces.TimeFrameReceiver
 import com.github.libretube.ui.listeners.SeekbarPreviewListener
 import com.github.libretube.ui.models.ChaptersViewModel
 import com.github.libretube.ui.models.CommonPlayerViewModel
+import com.github.libretube.ui.models.PlayerViewModel
 import com.github.libretube.util.OfflineTimeFrameReceiver
 import com.github.libretube.util.PlayingQueue
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +67,10 @@ class OfflinePlayerActivity : BaseActivity() {
     private lateinit var playerBinding: ExoStyledPlayerControlViewBinding
     private val commonPlayerViewModel: CommonPlayerViewModel by viewModels()
     private val chaptersViewModel: ChaptersViewModel by viewModels()
+
+    private val handler = Handler(Looper.getMainLooper())
+
+    private var sponsorBlockConfig = PlayerHelper.getSponsorBlockCategories()
 
     private val playerListener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) {
@@ -80,6 +93,13 @@ class OfflinePlayerActivity : BaseActivity() {
                 PictureInPictureCompat.setPictureInPictureParams(
                     this@OfflinePlayerActivity,
                     pipParams
+                )
+            }
+
+            if (isPlaying && PlayerHelper.sponsorBlockEnabled) {
+                handler.postDelayed(
+                    this@OfflinePlayerActivity::checkForSegments,
+                    100
                 )
             }
         }
@@ -136,6 +156,8 @@ class OfflinePlayerActivity : BaseActivity() {
 
         binding = ActivityOfflinePlayerBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        binding.player.init()
 
         val arguments = bundleOf(
             IntentData.downloadTab to DownloadTab.VIDEO,
@@ -195,13 +217,19 @@ class OfflinePlayerActivity : BaseActivity() {
         )
 
         lifecycleScope.launch {
-            val (downloadInfo, downloadItems, downloadChapters) = withContext(Dispatchers.IO) {
+            val (downloadInfo, downloadItems, downloadChapters, downloadSegments) = withContext(Dispatchers.IO) {
                 Database.downloadDao().findById(videoId)
             }!!
 
             val chapters = downloadChapters.map(DownloadChapter::toChapterSegment)
             chaptersViewModel.chaptersLiveData.value = chapters
             binding.player.setChapters(chapters)
+            downloadSegments?.let {
+                binding.player.segments = it.toSegmentData().segments
+                binding.player.binding.sbToggle.isVisible = true
+            }
+
+            sponsorBlockConfig = PlayerHelper.getSponsorBlockCategories()
 
             playerBinding.exoTitle.text = downloadInfo.title
             playerBinding.exoTitle.isVisible = true
@@ -209,6 +237,36 @@ class OfflinePlayerActivity : BaseActivity() {
             timeFrameReceiver = downloadItems.firstOrNull { it.path.exists() && it.type == FileType.VIDEO }?.path?.let {
                 OfflineTimeFrameReceiver(this@OfflinePlayerActivity, it)
             }
+        }
+    }
+
+    private fun checkForSegments() {
+        if (!playerController.isPlaying || !PlayerHelper.sponsorBlockEnabled) return
+
+        handler.postDelayed(this::checkForSegments, 100)
+        val segments = binding.player.segments
+        if (segments.isEmpty()) return
+
+        playerController.checkForSegments(
+            applicationContext,
+            segments,
+            sponsorBlockConfig,
+            // Skipping is done in OfflinePlayerService
+            skipAutomaticallyIfEnabled = false
+        )
+            ?.let { segment ->
+                if (commonPlayerViewModel.isMiniPlayerVisible.value == true) return@let
+
+                binding.sbSkipBtn.isVisible = true
+                binding.sbSkipBtn.setOnClickListener {
+                    playerController.seekTo((segment.segmentStartAndEnd.second * 1000f).toLong())
+                    segment.skipped = true
+                }
+                return
+            }
+
+        if (!playerController.isInSegment(segments)) {
+            binding.sbSkipBtn.isGone = true
         }
     }
 
