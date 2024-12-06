@@ -105,6 +105,7 @@ import com.github.libretube.obj.ShareData
 import com.github.libretube.obj.VideoResolution
 import com.github.libretube.parcelable.PlayerData
 import com.github.libretube.ui.activities.MainActivity
+import com.github.libretube.ui.activities.NoInternetActivity
 import com.github.libretube.ui.adapters.VideosAdapter
 import com.github.libretube.ui.base.BaseActivity
 import com.github.libretube.ui.dialogs.AddToPlaylistDialog
@@ -473,11 +474,19 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun initializeTransitionLayout() {
-        if (baseActivity !is MainActivity) return
-        val mainActivity = baseActivity as MainActivity
-        mainActivity.binding.container.isVisible = true
-        val mainMotionLayout = mainActivity.binding.mainMotionLayout
-        mainMotionLayout.progress = 0F
+        val isMain = baseActivity is MainActivity
+        val container = if (isMain) {
+            (baseActivity as MainActivity).binding.container
+        } else {
+            (baseActivity as NoInternetActivity).binding.container
+        }
+        container.isVisible = true
+        val mainMotionLayout = if (isMain) {
+            (baseActivity as MainActivity).binding.mainMotionLayout
+        } else {
+            null
+        }
+        mainMotionLayout?.progress = 0F
 
         var transitionStartId = 0
         var transitionEndId = 0
@@ -492,7 +501,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                 if (_binding == null) return
 
                 if (NavBarHelper.hasTabs()) {
-                    mainMotionLayout.progress = abs(progress)
+                    mainMotionLayout?.progress = abs(progress)
                 }
                 disableController()
                 commentsViewModel.setCommentSheetExpand(false)
@@ -509,7 +518,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                     updateCurrentSubtitle(viewModel.currentSubtitle)
                     binding.player.useController = true
                     commentsViewModel.setCommentSheetExpand(true)
-                    mainMotionLayout.progress = 0F
+                    mainMotionLayout?.progress = 0F
                     changeOrientationMode()
                 } else if (currentId == transitionEndId) {
                     commonPlayerViewModel.isMiniPlayerVisible.value = true
@@ -519,9 +528,13 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
                     commentsViewModel.setCommentSheetExpand(null)
                     binding.sbSkipBtn.isGone = true
                     if (NavBarHelper.hasTabs()) {
-                        mainMotionLayout.progress = 1F
+                        mainMotionLayout?.progress = 1F
                     }
-                    (activity as MainActivity).requestOrientationChange()
+                    if (isMain) {
+                        (baseActivity as MainActivity).requestOrientationChange()
+                    } else {
+                        (baseActivity as NoInternetActivity).requestOrientationChange()
+                    }
                 }
 
                 updateMaxSheetHeight()
@@ -544,9 +557,8 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
         binding.playerMotionLayout.progress = 1F
         binding.playerMotionLayout.transitionToStart()
 
-        val activity = requireActivity()
         if (PlayerHelper.pipEnabled) {
-            PictureInPictureCompat.setPictureInPictureParams(activity, pipParams)
+            PictureInPictureCompat.setPictureInPictureParams(baseActivity, pipParams)
         }
     }
 
@@ -1478,8 +1490,7 @@ class PlayerFragment : Fragment(), OnlinePlayerOptions {
             baseActivity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
         } else {
             // go to portrait mode
-            baseActivity.requestedOrientation =
-                (requireActivity() as BaseActivity).screenOrientationPref
+            baseActivity.requestedOrientation = baseActivity.screenOrientationPref
         }
     }
 
